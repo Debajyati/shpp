@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <string>
 
 inline void Flush() {
@@ -7,7 +8,7 @@ inline void Flush() {
   std::cerr << std::unitbuf;
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
   Flush();
 
   do {
@@ -23,11 +24,17 @@ int main(int argc, char* argv[]) {
     }
 
     if (command == "echo") {
-      std::string remainingLine;
+      std::string line;
+      std::getline(std::cin, line);
 
-      if (std::getline(std::cin,remainingLine)) {
-        std::cout << remainingLine << std::endl;
+      std::istringstream iss(line);
+
+      std::string nextword;
+
+      while (iss >> nextword) {
+        std::cout << nextword << " ";
       }
+      std::cout << std::endl;
 
       Flush();
       continue;
