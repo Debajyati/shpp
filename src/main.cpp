@@ -7,10 +7,15 @@ int main() {
   std::cerr << std::unitbuf;
 
   // TODO: Uncomment the code below to pass the first stage
-  std::cout << "$ ";
+  do {
+    std::cout << "$ ";
 
-  std::string command;
-  std::cin >> command;
+    std::string command;
+    std::cin >> command;
 
-  std::cerr << command << ": command not found" << std::endl;
+    std::cerr << command << ": command not found" << std::endl;
+    // Flush after every std::cout / std:cerr
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+  } while (true);
 }
