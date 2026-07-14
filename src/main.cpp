@@ -23,6 +23,20 @@ int main(int argc, char *argv[]) {
       break;
     }
 
+    if (command == "type") {
+      std::string argument;
+
+      if (std::cin >> argument) {
+        if (argument == "echo" || argument == "type" || argument == "exit") {
+          std::cout << argument << " is a shell builtin" << std::endl;
+          Flush();
+        } else {
+          std::cout << argument << ": not found" << std::endl;
+        }
+      }
+      continue;
+    }
+
     if (command == "echo") {
       std::string line;
       std::getline(std::cin, line);
