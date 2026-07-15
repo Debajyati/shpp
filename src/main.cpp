@@ -126,38 +126,82 @@ bool isExternalCommand(std::string &argument) {
   }
 }
 
-std::vector<std::string> parseArguments(const std::string &command,
-                                        const std::string &remainder) {
-  std::vector<std::string> args;
-  args.push_back(command); // The first element must always be the command name
+std::vector<std::string> parseArguments(const std::string& command, const std::string& remainder) {
+    std::vector<std::string> args;
+    args.push_back(command); // The first element is always the executable
 
-  std::string current_arg = "";
-  bool in_quotes = false;
-  char ch;
+    std::string current_arg = "";
+    bool in_single_quotes = false;
+    bool in_double_quotes = false;
 
-  std::istringstream stream(remainder);
-  stream >> std::noskipws; // Read spaces as literal characters
+    std::istringstream stream(remainder);
+    stream >> std::noskipws;
+    char ch;
 
-  while (stream >> ch) {
-    if (ch == '\'') {
-      in_quotes =
-          !in_quotes; // Toggle quote state, skip pushing the quote itself
-    } else if (ch == ' ' && !in_quotes) {
-      // End of an unquoted token
-      if (!current_arg.empty()) {
-        args.push_back(current_arg);
-        current_arg = "";
-      }
-    } else {
-      current_arg += ch;
+    while (stream >> ch) {
+        // 1. Handle Single Quotes State
+        if (in_single_quotes) {
+            if (ch == '\'') {
+                in_single_quotes = false; // Exit single quotes
+            } else {
+                current_arg += ch; // Everything else is literal
+            }
+            continue;
+        }
+
+        // 2. Handle Double Quotes State
+        if (in_double_quotes) {
+            if (ch == '"') {
+                in_double_quotes = false; // Exit double quotes
+            } else if (ch == '\\') {
+                // Peek at next character for conditional escaping
+                char next_ch;
+                if (stream >> next_ch) {
+                    if (next_ch == '"' || next_ch == '\\' || next_ch == '$' || next_ch == '\n') {
+                        current_arg += next_ch; // Escaped character
+                    } else {
+                        current_arg += ch;      // Keep literal backslash
+                        current_arg += next_ch; // Keep the character following it
+                    }
+                } else {
+                    current_arg += ch; // Trailing backslash at end of stream
+                }
+            } else {
+                current_arg += ch;
+            }
+            continue;
+        }
+
+        // 3. Handle Unquoted State
+        if (ch == '\'') {
+            in_single_quotes = true;
+        } else if (ch == '"') {
+            in_double_quotes = true;
+        } else if (ch == '\\') {
+            // Unquoted backslash always escapes the next single character
+            char next_ch;
+            if (stream >> next_ch) {
+                current_arg += next_ch;
+            } else {
+                current_arg += ch;
+            }
+        } else if (ch == ' ') {
+            // Space acts as argument separator only when outside all quotes
+            if (!current_arg.empty()) {
+                args.push_back(current_arg);
+                current_arg = "";
+            }
+        } else {
+            current_arg += ch;
+        }
     }
-  }
-  // Don't forget the last token
-  if (!current_arg.empty()) {
-    args.push_back(current_arg);
-  }
 
-  return args;
+    // Push the final token if one remains
+    if (!current_arg.empty()) {
+        args.push_back(current_arg);
+    }
+
+    return args;
 }
 
 int main(int argc, char *argv[]) {
