@@ -77,6 +77,19 @@ int main(int argc, char *argv[]) {
       break;
     }
 
+    // pwd shell builtin
+    if (command == "pwd") {
+      try {
+        std::filesystem::path cwd = std::filesystem::current_path();
+        std::cout << cwd.string() << std::endl;
+
+      } catch (const std::filesystem::filesystem_error &e) {
+        std::cerr << "Error " << e.code() << ": " << e.what() << std::endl;
+      }
+      Flush();
+      continue;
+    }
+
     // type command logic
     if (command == "type") {
       std::string argument;
@@ -176,7 +189,7 @@ int main(int argc, char *argv[]) {
       }
     } else {
       std::string line;
-      std::getline(std::cin,line);
+      std::getline(std::cin, line);
       std::cerr << command << ": command not found" << std::endl;
       // Flush after every std::cout / std:cerr
       Flush();
