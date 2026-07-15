@@ -10,8 +10,8 @@
 #include <unistd.h>
 #include <vector>
 
+// Flush after every std::cout / std:cerr
 inline void Flush() {
-  // Flush after every std::cout / std:cerr
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
 }
@@ -126,14 +126,60 @@ bool isExternalCommand(std::string &argument) {
   }
 }
 
+std::vector<std::string> parseArguments(const std::string &command,
+                                        const std::string &remainder) {
+  std::vector<std::string> args;
+  args.push_back(command); // The first element must always be the command name
+
+  std::string current_arg = "";
+  bool in_quotes = false;
+  char ch;
+
+  std::istringstream stream(remainder);
+  stream >> std::noskipws; // Read spaces as literal characters
+
+  while (stream >> ch) {
+    if (ch == '\'') {
+      in_quotes =
+          !in_quotes; // Toggle quote state, skip pushing the quote itself
+    } else if (ch == ' ' && !in_quotes) {
+      // End of an unquoted token
+      if (!current_arg.empty()) {
+        args.push_back(current_arg);
+        current_arg = "";
+      }
+    } else {
+      current_arg += ch;
+    }
+  }
+  // Don't forget the last token
+  if (!current_arg.empty()) {
+    args.push_back(current_arg);
+  }
+
+  return args;
+}
+
 int main(int argc, char *argv[]) {
   Flush();
 
   do {
     std::cout << "$ ";
 
+    // Read the ENTIRE line immediately at the top of the loop
+    std::string line;
+    if (!std::getline(std::cin, line)) {
+      break; // Handle EOF (Ctrl+D) safely
+    }
+
+    if (line.empty()) {
+      continue;
+    }
+
+    // Parse out the first word as the command
+    std::istringstream iss(line);
     std::string command;
-    std::cin >> command;
+    iss >> command;
 
     // the exit builtin. when shell recieves the exit command, it should
     // terminate immediately.
@@ -143,14 +189,8 @@ int main(int argc, char *argv[]) {
 
     // the cd shell builtin. changes the working directory
     if (command == "cd") {
-      std::string line, argument;
-      std::getline(std::cin, line);
-
-      std::istringstream iss(line);
-
+      std::string argument;
       if (!(iss >> argument)) {
-        // If no argument was provided (just typed "cd"), default to HOME
-        // directory
         char *home = std::getenv("HOME");
         argument = home ? home : "/";
       }
@@ -159,28 +199,9 @@ int main(int argc, char *argv[]) {
       // Use error_code to avoid exceptions
       std::error_code ec;
 
-      // Check if path exists first
-      if (!std::filesystem::exists(directory, ec)) {
-        if (ec) {
-          std::cerr << "Error " << ec.value() << ": " << ec.message() << "\n";
-        } else {
-          std::cerr << "cd: " << argument << ": No such file or directory\n";
-        }
-        Flush();
-        continue;
-      }
-
-      bool is_dir = std::filesystem::is_directory(directory, ec);
-
-      if (ec) {
-        std::cerr << "Error " << ec.value() << ": " << ec.message() << "\n";
-        Flush();
-        continue;
-      }
-
-      if (!is_dir) {
-        std::cerr << "cd: " << argument << ": No such file or directory"
-                  << std::endl;
+      if (!std::filesystem::exists(directory, ec) ||
+          !std::filesystem::is_directory(directory, ec)) {
+        std::cerr << "cd: " << argument << ": No such file or directory\n";
         Flush();
         continue;
       } else {
@@ -206,104 +227,83 @@ int main(int argc, char *argv[]) {
     if (command == "type") {
       std::string argument;
 
-      const char *path_val = std::getenv("PATH");
-      if (std::cin >> argument) {
+      if (iss >> argument) {
         if (argument == "echo" || argument == "type" || argument == "exit" ||
             argument == "pwd" || argument == "cd") {
           std::cout << argument << " is a shell builtin" << std::endl;
-          Flush();
-        } else if (path_val != nullptr) {
-          std::string path_str(path_val);
-          std::stringstream ps(path_str);
-
-          std::vector<std::string> pathsArray;
-          std::string token;
-
-          while (std::getline(ps, token, ':')) {
-            pathsArray.push_back(token);
-          }
-
-          bool notfound = true;
-          for (int i = 0; i < pathsArray.size(); i++) {
-            const std::string filepath = pathsArray[i] + "/" + argument;
-            if (fileExists(filepath) and isFileExecutable(filepath)) {
-              std::cout << argument << " is " << filepath << std::endl;
-              notfound = false;
-              Flush();
-              break;
-            } else
-              continue;
-          }
-          if (notfound)
-            std::cerr << argument << ": not found" << std::endl;
         } else {
-          std::cerr << argument << ": not found" << std::endl;
+          const char *path_val = std::getenv("PATH");
+          if (path_val != nullptr) {
+            std::stringstream ps(path_val);
+            std::string token;
+            bool found = false;
+            while (std::getline(ps, token, ':')) {
+              std::string filepath = token + "/" + argument;
+              if (fileExists(filepath) && isFileExecutable(filepath)) {
+                std::cout << argument << " is " << filepath << std::endl;
+                found = true;
+                break;
+              }
+            }
+            if (!found)
+              std::cerr << argument << ": not found" << std::endl;
+          } else {
+            std::cerr << argument << ": not found" << std::endl;
+          }
         }
       }
+      Flush();
       continue;
     }
 
+    std::string remainder = (iss.tellg() != -1) ? line.substr(iss.tellg()) : "";
     // the echo shell builtin command logic
     if (command == "echo") {
-      std::string line;
-      std::getline(std::cin, line);
+      // Parse args (we skip index 0 because args[0] is "echo")
+      std::vector<std::string> args = parseArguments(command, remainder);
 
-      std::istringstream iss(line);
-
-      std::string nextword;
-
-      while (iss >> nextword) {
-        std::cout << nextword << " ";
+      for (size_t i = 1; i < args.size(); ++i) {
+        std::cout << args[i];
+        if (i + 1 < args.size()) {
+          std::cout << " ";
+        }
       }
       std::cout << std::endl;
-
-      Flush();
       continue;
     }
 
     // executing external commands
     if (isExternalCommand(command)) {
-      std::string line;
-      std::getline(std::cin, line);
-      std::vector<std::string> tokens;
-      std::istringstream iss(line);
-      std::string nextword;
+      std::vector<std::string> tokens = parseArguments(command, remainder);
 
+      // Build the mutable char* array required by execvp
       std::vector<char *> fullCommand;
-      tokens.push_back(command);
-
-      while (iss >> nextword) {
-        tokens.push_back(nextword);
-      }
-
       for (auto &token : tokens) {
-        // &token[0] gives a mutable char* pointer to the string's internal
-        // buffer
         fullCommand.push_back(&token[0]);
       }
       fullCommand.push_back(nullptr);
 
       pid_t pid = fork();
-
       if (pid < 0) {
-        std::cerr << "fork failed... couldn't execute command!";
+        std::cerr << "fork failed... couldn't execute command!\n";
         continue;
       }
 
-      if (pid > 0) {
+      if (pid == 0) {
+        // Child process
+        execvp(fullCommand[0], fullCommand.data());
+        perror("Exec failed");
+        std::exit(1); // Make sure the child exits if exec fails
+      } else {
+        // Parent process
         int status;
         waitpid(pid, &status, 0);
       }
-
-      if (pid == 0) {
-        execvp(fullCommand[0], fullCommand.data());
-        perror("Exec failed"); // Only runs if execvp fails
-        exit(1);
-      }
-    } else {
-      std::string line;
-      std::getline(std::cin, line);
-      std::cerr << command << ": command not found" << std::endl;
+      continue;
+    }
+    // command not found
+    else {
+      std::cerr << command << ": not found" << std::endl;
       // Flush after every std::cout / std:cerr
       Flush();
     }
