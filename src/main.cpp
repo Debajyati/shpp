@@ -77,7 +77,55 @@ int main(int argc, char *argv[]) {
       break;
     }
 
-    // pwd shell builtin
+    // the cd shell builtin. changes the working directory
+    if (command == "cd") {
+      std::string line, argument;
+      std::getline(std::cin, line);
+
+      std::istringstream iss(line);
+
+      if (!(iss >> argument)) {
+        // If no argument was provided (just typed "cd"), default to HOME
+        // directory
+        char *home = std::getenv("HOME");
+        argument = home ? home : "/";
+      }
+
+      std::filesystem::path directory(argument);
+      // Use error_code to avoid exceptions
+      std::error_code ec;
+
+      // Check if path exists first
+      if (!std::filesystem::exists(directory, ec)) {
+        if (ec) {
+          std::cerr << "Error " << ec.value() << ": " << ec.message() << "\n";
+        } else {
+          std::cerr << "cd: " << argument << ": No such file or directory\n";
+        }
+        Flush();
+        continue;
+      }
+
+      bool is_dir = std::filesystem::is_directory(directory, ec);
+
+      if (ec) {
+        std::cerr << "Error " << ec.value() << ": " << ec.message() << "\n";
+        Flush();
+        continue;
+      }
+
+      if (!is_dir) {
+        std::cerr << "cd: " << argument << ": No such file or directory"
+                  << std::endl;
+        Flush();
+        continue;
+      } else {
+        std::filesystem::current_path(directory);
+        continue;
+      }
+    }
+
+    // the pwd shell builtin
     if (command == "pwd") {
       try {
         std::filesystem::path cwd = std::filesystem::current_path();
@@ -90,14 +138,14 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    // type command logic
+    // the type shell builtin
     if (command == "type") {
       std::string argument;
 
       const char *path_val = std::getenv("PATH");
       if (std::cin >> argument) {
         if (argument == "echo" || argument == "type" || argument == "exit" ||
-            argument == "pwd") {
+            argument == "pwd" || argument == "cd") {
           std::cout << argument << " is a shell builtin" << std::endl;
           Flush();
         } else if (path_val != nullptr) {
@@ -131,7 +179,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    // echo command logic
+    // the echo shell builtin command logic
     if (command == "echo") {
       std::string line;
       std::getline(std::cin, line);
