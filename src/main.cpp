@@ -96,7 +96,8 @@ int main(int argc, char *argv[]) {
 
       const char *path_val = std::getenv("PATH");
       if (std::cin >> argument) {
-        if (argument == "echo" || argument == "type" || argument == "exit") {
+        if (argument == "echo" || argument == "type" || argument == "exit" ||
+            argument == "pwd") {
           std::cout << argument << " is a shell builtin" << std::endl;
           Flush();
         } else if (path_val != nullptr) {
