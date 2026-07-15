@@ -1,10 +1,10 @@
 #include <cstdlib>
-#include <stdexcept>
 #include <filesystem>
 #include <iostream>
-#include <sstream>
-#include <string>
 #include <pwd.h>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -19,56 +19,64 @@ inline void Flush() {
 // Get current user's home directory
 std::string getHomeDirectory() {
 #if defined(_WIN32)
-    const char* homeDrive = std::getenv("HOMEDRIVE");
-    const char* homePath  = std::getenv("HOMEPATH");
-    const char* userProfile = std::getenv("USERPROFILE");
+  const char *homeDrive = std::getenv("HOMEDRIVE");
+  const char *homePath = std::getenv("HOMEPATH");
+  const char *userProfile = std::getenv("USERPROFILE");
 
-    if (userProfile) return userProfile;
-    if (homeDrive && homePath) return std::string(homeDrive) + homePath;
+  if (userProfile)
+    return userProfile;
+  if (homeDrive && homePath)
+    return std::string(homeDrive) + homePath;
 
-    throw std::runtime_error("Unable to determine home directory on Windows");
+  throw std::runtime_error("Unable to determine home directory on Windows");
 #else
-    const char* home = std::getenv("HOME");
-    if (home) return home;
+  const char *home = std::getenv("HOME");
+  if (home)
+    return home;
 
-    struct passwd* pwd = getpwuid(getuid());
-    if (pwd && pwd->pw_dir) return pwd->pw_dir;
+  struct passwd *pwd = getpwuid(getuid());
+  if (pwd && pwd->pw_dir)
+    return pwd->pw_dir;
 
-    throw std::runtime_error("Unable to determine home directory on Unix");
+  throw std::runtime_error("Unable to determine home directory on Unix");
 #endif
 }
 
 // Expand leading '~' in a path
-std::filesystem::path expandUserPath(const std::string& path) {
-    if (path.empty() || path[0] != '~') {
-        return path; // No tilde, return as-is
-    }
+std::filesystem::path expandUserPath(const std::string &path) {
+  if (path.empty() || path[0] != '~') {
+    return path; // No tilde, return as-is
+  }
 
-    // Handle "~" or "~/..."
-    if (path.size() == 1 || path[1] == '/') {
-        return std::filesystem::path(getHomeDirectory()) / path.substr(2);
-    }
+  // Handle "~" or "~/..."
+  if (path.size() == 1 || path[1] == '/') {
+    std::string home = getHomeDirectory();
+    if (path.length() <= 2)
+      return std::filesystem::path(home);
+    return std::filesystem::path(home) / path.substr(2);
+  }
 
-    // Handle "~username" (Unix only)
+  // Handle "~username" (Unix only)
 #if !defined(_WIN32)
-    size_t slashPos = path.find('/');
-    std::string user = (slashPos == std::string::npos) ? path.substr(1) : path.substr(1, slashPos - 1);
+  size_t slashPos = path.find('/');
+  std::string user = (slashPos == std::string::npos)
+                         ? path.substr(1)
+                         : path.substr(1, slashPos - 1);
 
-    struct passwd* pwd = getpwnam(user.c_str());
-    if (!pwd || !pwd->pw_dir) {
-        throw std::runtime_error("User '" + user + "' not found");
-    }
+  struct passwd *pwd = getpwnam(user.c_str());
+  if (!pwd || !pwd->pw_dir) {
+    throw std::runtime_error("User '" + user + "' not found");
+  }
 
-    if (slashPos == std::string::npos) {
-        return pwd->pw_dir;
-    } else {
-        return std::filesystem::path(pwd->pw_dir) / path.substr(slashPos + 1);
-    }
+  if (slashPos == std::string::npos) {
+    return pwd->pw_dir;
+  } else {
+    return std::filesystem::path(pwd->pw_dir) / path.substr(slashPos + 1);
+  }
 #else
-    throw std::runtime_error("~username expansion not supported on Windows");
+  throw std::runtime_error("~username expansion not supported on Windows");
 #endif
 }
-
 
 /* checks if a file exists in the given absolute path */
 bool fileExists(const std::string &path) {
