@@ -126,152 +126,144 @@ bool isExternalCommand(std::string &argument) {
   }
 }
 
-std::vector<std::string> parseArguments(const std::string& command, const std::string& remainder) {
-    std::vector<std::string> args;
-    args.push_back(command); // The first element is always the executable
+std::vector<std::string> parseArguments(const std::string &line) {
+  std::vector<std::string> args;
+  std::string current_arg = "";
+  bool in_single_quotes = false;
+  bool in_double_quotes = false;
 
-    std::string current_arg = "";
-    bool in_single_quotes = false;
-    bool in_double_quotes = false;
+  std::istringstream stream(line);
+  stream >> std::noskipws;
+  char ch;
 
-    std::istringstream stream(remainder);
-    stream >> std::noskipws;
-    char ch;
+  while (stream >> ch) {
+    // 1. Handle Single Quotes State
+    if (in_single_quotes) {
+      if (ch == '\'') {
+        in_single_quotes = false;
+      } else {
+        current_arg += ch;
+      }
+      continue;
+    }
 
-    while (stream >> ch) {
-        // 1. Handle Single Quotes State
-        if (in_single_quotes) {
-            if (ch == '\'') {
-                in_single_quotes = false; // Exit single quotes
-            } else {
-                current_arg += ch; // Everything else is literal
-            }
-            continue;
-        }
-
-        // 2. Handle Double Quotes State
-        if (in_double_quotes) {
-            if (ch == '"') {
-                in_double_quotes = false; // Exit double quotes
-            } else if (ch == '\\') {
-                // Peek at next character for conditional escaping
-                char next_ch;
-                if (stream >> next_ch) {
-                    if (next_ch == '"' || next_ch == '\\' || next_ch == '$' || next_ch == '\n') {
-                        current_arg += next_ch; // Escaped character
-                    } else {
-                        current_arg += ch;      // Keep literal backslash
-                        current_arg += next_ch; // Keep the character following it
-                    }
-                } else {
-                    current_arg += ch; // Trailing backslash at end of stream
-                }
-            } else {
-                current_arg += ch;
-            }
-            continue;
-        }
-
-        // 3. Handle Unquoted State
-        if (ch == '\'') {
-            in_single_quotes = true;
-        } else if (ch == '"') {
-            in_double_quotes = true;
-        } else if (ch == '\\') {
-            // Unquoted backslash always escapes the next single character
-            char next_ch;
-            if (stream >> next_ch) {
-                current_arg += next_ch;
-            } else {
-                current_arg += ch;
-            }
-        } else if (ch == ' ') {
-            // Space acts as argument separator only when outside all quotes
-            if (!current_arg.empty()) {
-                args.push_back(current_arg);
-                current_arg = "";
-            }
-        } else {
+    // 2. Handle Double Quotes State
+    if (in_double_quotes) {
+      if (ch == '"') {
+        in_double_quotes = false;
+      } else if (ch == '\\') {
+        char next_ch;
+        if (stream >> next_ch) {
+          if (next_ch == '"' || next_ch == '\\' || next_ch == '$' ||
+              next_ch == '\n') {
+            current_arg += next_ch;
+          } else {
             current_arg += ch;
+            current_arg += next_ch;
+          }
+        } else {
+          current_arg += ch;
         }
+      } else {
+        current_arg += ch;
+      }
+      continue;
     }
 
-    // Push the final token if one remains
-    if (!current_arg.empty()) {
+    // 3. Handle Unquoted State
+    if (ch == '\'') {
+      in_single_quotes = true;
+    } else if (ch == '"') {
+      in_double_quotes = true;
+    } else if (ch == '\\') {
+      char next_ch;
+      if (stream >> next_ch) {
+        current_arg += next_ch;
+      } else {
+        current_arg += ch;
+      }
+    } else if (ch == ' ') {
+      // Space marks the end of a token (command or argument) only when unquoted
+      if (!current_arg.empty()) {
         args.push_back(current_arg);
+        current_arg = "";
+      }
+    } else {
+      current_arg += ch;
     }
+  }
 
-    return args;
+  if (!current_arg.empty()) {
+    args.push_back(current_arg);
+  }
+
+  return args;
 }
 
 int main(int argc, char *argv[]) {
   Flush();
 
-  do {
+  while (true) {
     std::cout << "$ ";
+    Flush();
 
-    // Read the ENTIRE line immediately at the top of the loop
     std::string line;
     if (!std::getline(std::cin, line)) {
-      break; // Handle EOF (Ctrl+D) safely
+      break; // Handle EOF (Ctrl+D)
     }
 
-    if (line.empty()) {
+    // 1. Parse the entire line into tokens instantly
+    std::vector<std::string> tokens = parseArguments(line);
+
+    if (tokens.empty()) {
       continue;
     }
 
-    // Parse out the first word as the command
-    std::istringstream iss(line);
-    std::string command;
-    iss >> command;
+    // 2. The first token is always the command name (safely stripped of
+    // quotes!)
+    std::string command = tokens[0];
 
-    // the exit builtin. when shell recieves the exit command, it should
-    // terminate immediately.
+    // the exit builtin
     if (command == "exit") {
       break;
     }
 
-    // the cd shell builtin. changes the working directory
+    // the cd shell builtin
     if (command == "cd") {
       std::string argument;
-      if (!(iss >> argument)) {
+      if (tokens.size() > 1) {
+        argument = tokens[1]; // Use the already parsed argument
+      } else {
         char *home = std::getenv("HOME");
         argument = home ? home : "/";
       }
 
       std::filesystem::path directory(expandUserPath(argument));
-      // Use error_code to avoid exceptions
       std::error_code ec;
 
       if (!std::filesystem::exists(directory, ec) ||
           !std::filesystem::is_directory(directory, ec)) {
         std::cerr << "cd: " << argument << ": No such file or directory\n";
-        Flush();
-        continue;
-      } else {
-        std::filesystem::current_path(directory);
         continue;
       }
+      std::filesystem::current_path(directory);
+      continue;
     }
 
     // the pwd shell builtin
     if (command == "pwd") {
       try {
-        std::filesystem::path cwd = std::filesystem::current_path();
-        std::cout << cwd.string() << std::endl;
-
+        std::cout << std::filesystem::current_path().string() << std::endl;
       } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Error " << e.code() << ": " << e.what() << std::endl;
       }
-      Flush();
       continue;
     }
 
     // the type shell builtin
     if (command == "type") {
-      std::string argument;
-
-      if (iss >> argument) {
+      if (tokens.size() > 1) {
+        std::string argument = tokens[1];
         if (argument == "echo" || argument == "type" || argument == "exit" ||
             argument == "pwd" || argument == "cd") {
           std::cout << argument << " is a shell builtin" << std::endl;
@@ -296,19 +288,15 @@ int main(int argc, char *argv[]) {
           }
         }
       }
-      Flush();
       continue;
     }
 
-    std::string remainder = (iss.tellg() != -1) ? line.substr(iss.tellg()) : "";
-    // the echo shell builtin command logic
+    // THE ECHO BUILTIN
     if (command == "echo") {
-      // Parse args (we skip index 0 because args[0] is "echo")
-      std::vector<std::string> args = parseArguments(command, remainder);
-
-      for (size_t i = 1; i < args.size(); ++i) {
-        std::cout << args[i];
-        if (i + 1 < args.size()) {
+      // Simply loop through tokens starting from index 1
+      for (size_t i = 1; i < tokens.size(); ++i) {
+        std::cout << tokens[i];
+        if (i + 1 < tokens.size()) {
           std::cout << " ";
         }
       }
@@ -316,14 +304,13 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    // executing external commands
+    // EXTERNAL COMMAND LOGIC
     if (isExternalCommand(command)) {
-      std::vector<std::string> tokens = parseArguments(command, remainder);
-
-      // Build the mutable char* array required by execvp
+      // Build the mutable char* array using our pre-tokenized array
       std::vector<char *> fullCommand;
       for (auto &token : tokens) {
-        fullCommand.push_back(&token[0]);
+        fullCommand.push_back(
+            &token[0]); // Explicitly pass the underlying buffer
       }
       fullCommand.push_back(nullptr);
 
@@ -334,23 +321,23 @@ int main(int argc, char *argv[]) {
       }
 
       if (pid == 0) {
-        // Child process
+        // Child process: fullCommand[0] will be something clean like
+        // "/usr/bin/my app"
         execvp(fullCommand[0], fullCommand.data());
         perror("Exec failed");
-        std::exit(1); // Make sure the child exits if exec fails
+        std::exit(1);
       } else {
-        // Parent process
         int status;
         waitpid(pid, &status, 0);
       }
       continue;
     }
-    // command not found
+
+    // COMMAND NOT FOUND
     else {
       std::cerr << command << ": not found" << std::endl;
-      // Flush after every std::cout / std:cerr
       Flush();
     }
-  } while (true);
+  }
   return 0;
 }
