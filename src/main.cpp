@@ -375,34 +375,38 @@ int main(int argc, char *argv[]) {
 
       if (pid == 0) {
         // Child process execution window
-        // 3. Open the file for writing
         // O_WRONLY: Write-only mode
         // O_CREAT: Create file if it doesn't exist
         // O_TRUNC: Clear existing content (use O_APPEND to append instead)
         // 0644: Read/Write permissions for owner, Read-only for others
         if (redirect.has_redirect) {
-          // Choose between O_TRUNC (overwrite) and O_APPEND (append)
-          int mode_flag = redirect.append_mode ? O_APPEND : O_TRUNC;
+          // 1. DYNAMICALLY CREATE PARENT DIRECTORIES IF THEY DO NOT EXIST
+          std::filesystem::path out_path(redirect.filename);
+          if (out_path.has_parent_path()) {
+            std::error_code dir_ec;
+            // Creates the directory structure (equivalent to 'mkdir -p')
+            std::filesystem::create_directories(out_path.parent_path(), dir_ec);
+          }
 
+          // 2. Open the file now that its parent directory is guaranteed to
+          // exist
+          int mode_flag = redirect.append_mode ? O_APPEND : O_TRUNC;
           int fd = open(redirect.filename.c_str(),
                         O_WRONLY | O_CREAT | mode_flag, 0644);
 
           if (fd < 0) {
-            // Note: Standard shells output this error to stderr!
             std::cerr << "shell: " << redirect.filename
                       << ": No such file or directory\n";
             std::exit(1);
           }
 
-          // CHOOSE FILENO TARGET DYNAMICALLY
-          // If it is '2>', redirect STDERR. If it is '>', redirect STDOUT.
           int target_fd = redirect.is_stderr ? STDERR_FILENO : STDOUT_FILENO;
 
           if (dup2(fd, target_fd) < 0) {
             perror("Redirection failed");
             std::exit(1);
           }
-          close(fd); // Close the original descriptor so we don't leak it
+          close(fd);
         }
 
         execvp(fullCommand[0], fullCommand.data());
