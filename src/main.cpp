@@ -380,28 +380,35 @@ int main(int argc, char *argv[]) {
         // O_CREAT: Create file if it doesn't exist
         // O_TRUNC: Clear existing content (use O_APPEND to append instead)
         // 0644: Read/Write permissions for owner, Read-only for others
-
         if (redirect.has_redirect) {
           // Choose between O_TRUNC (overwrite) and O_APPEND (append)
           int mode_flag = redirect.append_mode ? O_APPEND : O_TRUNC;
 
           int fd = open(redirect.filename.c_str(),
                         O_WRONLY | O_CREAT | mode_flag, 0644);
+
           if (fd < 0) {
-            std::cerr << "Failed to open " << redirect.filename << " file!\n";
-            std::exit(1); // CRITICAL: Exit immediately so execvp doesn't run with broken descriptors
+            // Note: Standard shells output this error to stderr!
+            std::cerr << "shell: " << redirect.filename
+                      << ": No such file or directory\n";
+            std::exit(1);
           }
 
+          // CHOOSE FILENO TARGET DYNAMICALLY
+          // If it is '2>', redirect STDERR. If it is '>', redirect STDOUT.
           int target_fd = redirect.is_stderr ? STDERR_FILENO : STDOUT_FILENO;
 
           if (dup2(fd, target_fd) < 0) {
-            std::cerr << "Redirection failed!\n";
+            perror("Redirection failed");
             std::exit(1);
           }
-          close(fd);
+          close(fd); // Close the original descriptor so we don't leak it
         }
 
         execvp(fullCommand[0], fullCommand.data());
+
+        // If execvp fails, it means the command binary wasn't found or couldn't
+        // run
         perror("Exec failed");
         std::exit(1);
       } else {
