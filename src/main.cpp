@@ -330,13 +330,18 @@ int main(int argc, char *argv[]) {
       if (tokens.size() > 2) {
         int output_redirect_idx = -1;
         bool is_stderr = false;
+        bool is_append = false;
 
         // Scan for ANY redirection operator inside echo's arguments
         for (size_t i = 1; i < tokens.size(); i++) {
-          if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>") {
+          if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>" ||
+              tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
             output_redirect_idx = i;
-            if (tokens[i] == "2>") {
+            if (tokens[i] == "2>" || tokens[i] == "2>>") {
               is_stderr = true;
+            }
+            if (tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
+              is_append = true;
             }
             break;
           }
@@ -347,14 +352,15 @@ int main(int argc, char *argv[]) {
           continue;
         } else if (output_redirect_idx + 1 < tokens.size()) {
           std::ofstream outFile;
+          // Choose write mode dynamically: append vs truncate
+          std::ios_base::openmode write_mode = is_append ? std::ios_base::app : std::ios_base::trunc;
 
           if (!is_stderr) {
-            // Normal stdout redirection: Open the file to write contents into it
-            outFile.open(tokens[output_redirect_idx + 1], std::ios_base::trunc);
+            // Normal stdout redirection
+            outFile.open(tokens[output_redirect_idx + 1], write_mode);
           } else {
-            // Stderr redirection: Even though echo doesn't output errors,
-            // we MUST open and close the file to ensure it gets created on disk!
-            std::ofstream touchFile(tokens[output_redirect_idx + 1], std::ios_base::trunc);
+            // Stderr redirection: Touch the file using the correct write mode so it creates/preserves it
+            std::ofstream touchFile(tokens[output_redirect_idx + 1], write_mode);
             touchFile.close();
           }
 
@@ -378,6 +384,7 @@ int main(int argc, char *argv[]) {
                 std::cout << ' ' << tokens[i];
               }
             } else {
+              // Trailing arguments always append to the target file
               std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1], std::ios::app);
               if (outFileInAppendMode.is_open()) {
                 for (size_t i = output_redirect_idx + 2; i < tokens.size(); i++) {
@@ -404,18 +411,22 @@ int main(int argc, char *argv[]) {
       }
     }
 
-
     // EXTERNAL COMMAND LOGIC
     if (isExternalCommand(command)) {
       int output_redirect_idx = -1;
-      bool is_stderr = false; // Tracks if we found 2>
+      bool is_stderr = false;
+      bool is_append = false;
 
-      // Look through tokens to find ANY redirection operator (>, 1>, or 2>)
+      // Look through tokens to find ANY redirection operator
       for (size_t i = 1; i < tokens.size(); i++) {
-        if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>") {
+        if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>" ||
+            tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
           output_redirect_idx = i;
-          if (tokens[i] == "2>") {
+          if (tokens[i] == "2>" || tokens[i] == "2>>") {
             is_stderr = true;
+          }
+          if (tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
+            is_append = true;
           }
           break;
         }
@@ -423,8 +434,7 @@ int main(int argc, char *argv[]) {
 
       // Build the mutable char* array up to the redirection operator index
       std::vector<char *> fullCommand;
-      size_t end =
-          (output_redirect_idx == -1) ? tokens.size() : output_redirect_idx;
+      size_t end = (output_redirect_idx == -1) ? tokens.size() : output_redirect_idx;
 
       for (size_t i = 0; i < end; i++) {
         auto &token = tokens[i];
@@ -440,23 +450,21 @@ int main(int argc, char *argv[]) {
 
       if (pid == 0) {
         // Child process execution window
-        // 3. Open the file for writing
         // O_WRONLY: Write-only mode
         // O_CREAT: Create file if it doesn't exist
         // O_TRUNC: Clear existing content (use O_APPEND to append instead)
         // 0644: Read/Write permissions for owner, Read-only for others
-        if (output_redirect_idx != -1 &&
-            output_redirect_idx + 1 < tokens.size()) {
+        if (output_redirect_idx != -1 && output_redirect_idx + 1 < tokens.size()) {
           const char *outFile = tokens[output_redirect_idx + 1].c_str();
 
-          int fd = open(outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+          // Choose O_APPEND if running a append mode redirection, otherwise clear file with O_TRUNC
+          int file_mode = is_append ? O_APPEND : O_TRUNC;
+          int fd = open(outFile, O_WRONLY | O_CREAT | file_mode, 0644);
+
           if (fd < 0) {
-            std::exit(1);
+             std::exit(1);
           }
 
-          // DYNAMIC FILENO REDIRECTION:
-          // If we flagged is_stderr as true, redirect STDERR_FILENO (2).
-          // Otherwise, redirect STDOUT_FILENO (1).
           int target_fd = is_stderr ? STDERR_FILENO : STDOUT_FILENO;
 
           if (dup2(fd, target_fd) < 0) {
