@@ -348,6 +348,10 @@ int main(int argc, char *argv[]) {
             }
             outFileInAppendMode.close();
           }
+          std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
+                                            std::ios::app);
+          outFileInAppendMode << std::endl;
+          outFileInAppendMode.close();
           continue;
         }
 
