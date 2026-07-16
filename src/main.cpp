@@ -346,18 +346,20 @@ int main(int argc, char *argv[]) {
           printTokens(tokens, std::cout, tokens.size());
           continue;
         } else if (output_redirect_idx + 1 < tokens.size()) {
-          // Choose the right output stream or file mode
           std::ofstream outFile;
 
-          // If it is 2>, echo itself still writes to std::cout!
-          // (Because echo outputs normal text to stdout, not stderr).
-          // But we must completely drop the 2> and filename from printing.
           if (!is_stderr) {
+            // Normal stdout redirection: Open the file to write contents into it
             outFile.open(tokens[output_redirect_idx + 1], std::ios_base::trunc);
+          } else {
+            // Stderr redirection: Even though echo doesn't output errors,
+            // we MUST open and close the file to ensure it gets created on disk!
+            std::ofstream touchFile(tokens[output_redirect_idx + 1], std::ios_base::trunc);
+            touchFile.close();
           }
 
-          // Print tokens up to the redirection index
-          std::ostream &targetStream = is_stderr ? std::cout : outFile;
+          // Choose the right output stream for the text tokens
+          std::ostream& targetStream = is_stderr ? std::cout : outFile;
 
           if (is_stderr || outFile.is_open()) {
             for (size_t i = 1; i < output_redirect_idx; i++) {
@@ -366,8 +368,7 @@ int main(int argc, char *argv[]) {
                 targetStream << ' ';
               }
             }
-            if (!is_stderr)
-              outFile.close();
+            if (!is_stderr) outFile.close();
           }
 
           // Handle any tokens trailing AFTER the filename
@@ -377,11 +378,9 @@ int main(int argc, char *argv[]) {
                 std::cout << ' ' << tokens[i];
               }
             } else {
-              std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
-                                                std::ios::app);
+              std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1], std::ios::app);
               if (outFileInAppendMode.is_open()) {
-                for (size_t i = output_redirect_idx + 2; i < tokens.size();
-                     i++) {
+                for (size_t i = output_redirect_idx + 2; i < tokens.size(); i++) {
                   outFileInAppendMode << ' ' << tokens[i];
                 }
               }
@@ -393,8 +392,7 @@ int main(int argc, char *argv[]) {
           if (is_stderr) {
             std::cout << std::endl;
           } else {
-            std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
-                                              std::ios::app);
+            std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1], std::ios::app);
             outFileInAppendMode << std::endl;
             outFileInAppendMode.close();
           }
@@ -405,6 +403,7 @@ int main(int argc, char *argv[]) {
         continue;
       }
     }
+
 
     // EXTERNAL COMMAND LOGIC
     if (isExternalCommand(command)) {
