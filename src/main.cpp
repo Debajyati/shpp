@@ -1,5 +1,8 @@
+#include <cstddef>
 #include <cstdlib>
+#include <fcntl.h>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <pwd.h>
 #include <sstream>
@@ -200,6 +203,19 @@ std::vector<std::string> parseArguments(const std::string &line) {
   return args;
 }
 
+// Simply loop through tokens. By default starting from index 1
+void printTokens(std::vector<std::string> &tokens, std::ostream &out,
+                 size_t end, size_t start = 1) {
+  for (size_t i = start; i < end; ++i) {
+    out << tokens[i];
+    if (i + 1 < end) {
+      out << " ";
+    }
+  }
+  out << std::endl;
+  Flush();
+};
+
 int main(int argc, char *argv[]) {
   Flush();
 
@@ -232,7 +248,7 @@ int main(int argc, char *argv[]) {
     if (command == "cd") {
       std::string argument;
       if (tokens.size() > 1) {
-        argument = tokens[1]; // Use the already parsed argument
+        argument = tokens[1];
       } else {
         char *home = std::getenv("HOME");
         argument = home ? home : "/";
@@ -253,10 +269,15 @@ int main(int argc, char *argv[]) {
     // the pwd shell builtin
     if (command == "pwd") {
       try {
-        std::cout << std::filesystem::current_path().string() << std::endl;
+        if ((tokens[1] == ">" or tokens[1] == "1>") and !tokens[2].empty()) {
+          std::ofstream output_file(tokens[2], std::ios::trunc);
+          output_file << std::filesystem::current_path().string() << std::endl;
+        } else
+          std::cout << std::filesystem::current_path().string() << std::endl;
       } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Error " << e.code() << ": " << e.what() << std::endl;
       }
+      Flush();
       continue;
     }
 
@@ -293,22 +314,68 @@ int main(int argc, char *argv[]) {
 
     // THE ECHO BUILTIN
     if (command == "echo") {
-      // Simply loop through tokens starting from index 1
-      for (size_t i = 1; i < tokens.size(); ++i) {
-        std::cout << tokens[i];
-        if (i + 1 < tokens.size()) {
-          std::cout << " ";
+      if (tokens.size() > 2) {
+        int output_redirect_idx = -1;
+        for (size_t i = 1; i < tokens.size(); i++) {
+          if (tokens[i] == ">" || tokens[i] == "1>") {
+            output_redirect_idx = i;
+            break;
+          }
         }
+        if (output_redirect_idx == -1) {
+          printTokens(tokens, std::cout, tokens.size());
+          continue;
+        } else if (output_redirect_idx + 1 < tokens.size()) {
+          std::ofstream outFile(tokens[output_redirect_idx + 1],
+                                std::ios_base::trunc);
+
+          if (outFile.is_open()) {
+            for (size_t i = 1; i < output_redirect_idx; i++) {
+              outFile << tokens[i];
+              if (i != output_redirect_idx - 1) {
+                outFile << ' ';
+              }
+            }
+            outFile.close();
+          }
+          if (output_redirect_idx + 1 < tokens.size() - 1) {
+            std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
+                                              std::ios::app);
+            if (outFileInAppendMode.is_open()) {
+              for (size_t i = output_redirect_idx + 2; i < tokens.size(); i++) {
+                outFileInAppendMode << ' ' << tokens[i];
+              }
+            }
+            outFileInAppendMode.close();
+          }
+          continue;
+        }
+
+      } else {
+        printTokens(tokens, std::cout, tokens.size());
+        continue;
       }
-      std::cout << std::endl;
-      continue;
     }
 
     // EXTERNAL COMMAND LOGIC
     if (isExternalCommand(command)) {
+      int output_redirect_idx = -1;
+      size_t idx = 2;
+      while (idx < tokens.size() - 1) {
+        if (tokens[idx] == ">" or tokens[idx] == "1>") {
+          output_redirect_idx = idx;
+          break;
+        }
+        idx++;
+      }
+
       // Build the mutable char* array using our pre-tokenized array
       std::vector<char *> fullCommand;
-      for (auto &token : tokens) {
+      size_t end =
+          (output_redirect_idx == -1) ? tokens.size() : output_redirect_idx;
+
+      for (size_t i = 0; i < end; i++) {
+        auto &token = tokens[i];
         fullCommand.push_back(
             &token[0]); // Explicitly pass the underlying buffer
       }
@@ -321,6 +388,31 @@ int main(int argc, char *argv[]) {
       }
 
       if (pid == 0) {
+        if (output_redirect_idx != -1) {
+          const char *outFile = tokens[output_redirect_idx + 1].c_str();
+
+          // 3. Open the file for writing
+          // O_WRONLY: Write-only mode
+          // O_CREAT: Create file if it doesn't exist
+          // O_TRUNC: Clear existing content (use O_APPEND to append instead)
+          // 0644: Read/Write permissions for owner, Read-only for others
+          int fd = open(outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+          if (fd < 0) {
+            std::cerr << "Failed to open " << outFile << " file!" << std::endl;
+            return 1;
+          }
+
+          // 4. Redirect standard output (STDOUT_FILENO = 1) to the file
+          // descriptor
+          if (dup2(fd, STDOUT_FILENO) < 0) {
+            std::cerr << "Redirection failed!" << std::endl;
+            return 1;
+          }
+
+          // 5. Close the unneeded file descriptor copy
+          close(fd);
+        }
         // Child process: fullCommand[0] will be something clean like
         // "/usr/bin/my app"
         execvp(fullCommand[0], fullCommand.data());
