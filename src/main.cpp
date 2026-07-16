@@ -389,14 +389,14 @@ int main(int argc, char *argv[]) {
                         O_WRONLY | O_CREAT | mode_flag, 0644);
           if (fd < 0) {
             std::cerr << "Failed to open " << redirect.filename << " file!\n";
-            return 1;
+            std::exit(1); // CRITICAL: Exit immediately so execvp doesn't run with broken descriptors
           }
 
           int target_fd = redirect.is_stderr ? STDERR_FILENO : STDOUT_FILENO;
 
           if (dup2(fd, target_fd) < 0) {
             std::cerr << "Redirection failed!\n";
-            return 1;
+            std::exit(1);
           }
           close(fd);
         }
