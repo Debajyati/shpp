@@ -19,14 +19,6 @@ inline void Flush() {
   std::cerr << std::unitbuf;
 }
 
-// A structure to hold our redirection information
-struct RedirectionInfo {
-  bool has_redirect = false;
-  std::string filename = "";
-  bool is_stderr = false; // true if '2>', false if '>' or '1>'
-  bool append_mode = false;
-};
-
 // Get current user's home directory
 std::string getHomeDirectory() {
 #if defined(_WIN32)
@@ -333,46 +325,79 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    // THE ECHO BUILTIN (Your exact, original working logic preserved)
+    // THE ECHO BUILTIN
     if (command == "echo") {
       if (tokens.size() > 2) {
         int output_redirect_idx = -1;
+        bool is_stderr = false;
+
+        // Scan for ANY redirection operator inside echo's arguments
         for (size_t i = 1; i < tokens.size(); i++) {
-          if (tokens[i] == ">" || tokens[i] == "1>") {
+          if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>") {
             output_redirect_idx = i;
+            if (tokens[i] == "2>") {
+              is_stderr = true;
+            }
             break;
           }
         }
+
         if (output_redirect_idx == -1) {
           printTokens(tokens, std::cout, tokens.size());
           continue;
         } else if (output_redirect_idx + 1 < tokens.size()) {
-          std::ofstream outFile(tokens[output_redirect_idx + 1],
-                                std::ios_base::trunc);
+          // Choose the right output stream or file mode
+          std::ofstream outFile;
 
-          if (outFile.is_open()) {
+          // If it is 2>, echo itself still writes to std::cout!
+          // (Because echo outputs normal text to stdout, not stderr).
+          // But we must completely drop the 2> and filename from printing.
+          if (!is_stderr) {
+            outFile.open(tokens[output_redirect_idx + 1], std::ios_base::trunc);
+          }
+
+          // Print tokens up to the redirection index
+          std::ostream &targetStream = is_stderr ? std::cout : outFile;
+
+          if (is_stderr || outFile.is_open()) {
             for (size_t i = 1; i < output_redirect_idx; i++) {
-              outFile << tokens[i];
+              targetStream << tokens[i];
               if (i != output_redirect_idx - 1) {
-                outFile << ' ';
+                targetStream << ' ';
               }
             }
-            outFile.close();
+            if (!is_stderr)
+              outFile.close();
           }
+
+          // Handle any tokens trailing AFTER the filename
           if (output_redirect_idx + 1 < tokens.size() - 1) {
+            if (is_stderr) {
+              for (size_t i = output_redirect_idx + 2; i < tokens.size(); i++) {
+                std::cout << ' ' << tokens[i];
+              }
+            } else {
+              std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
+                                                std::ios::app);
+              if (outFileInAppendMode.is_open()) {
+                for (size_t i = output_redirect_idx + 2; i < tokens.size();
+                     i++) {
+                  outFileInAppendMode << ' ' << tokens[i];
+                }
+              }
+              outFileInAppendMode.close();
+            }
+          }
+
+          // Wrap up the line ending
+          if (is_stderr) {
+            std::cout << std::endl;
+          } else {
             std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
                                               std::ios::app);
-            if (outFileInAppendMode.is_open()) {
-              for (size_t i = output_redirect_idx + 2; i < tokens.size(); i++) {
-                outFileInAppendMode << ' ' << tokens[i];
-              }
-            }
+            outFileInAppendMode << std::endl;
             outFileInAppendMode.close();
           }
-          std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
-                                            std::ios::app);
-          outFileInAppendMode << std::endl;
-          outFileInAppendMode.close();
           continue;
         }
       } else {
