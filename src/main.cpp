@@ -236,57 +236,14 @@ int main(int argc, char *argv[]) {
       break; // Handle EOF (Ctrl+D)
     }
 
-    // Parse the entire line into tokens instantly
+    // 1. Parse the entire line into tokens instantly
     std::vector<std::string> tokens = parseArguments(line);
-
-    RedirectionInfo redirect;
-
-    // Loop through the tokens to find the redirection operator
-    for (size_t i = 0; i < tokens.size(); ++i) {
-      if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>" ||
-          tokens[i] == ">>" || tokens[i] == "2>>") {
-
-        if (i + 1 < tokens.size()) {
-          redirect.has_redirect = true;
-          redirect.filename = tokens[i + 1];
-          redirect.is_stderr = (tokens[i] == "2>" || tokens[i] == "2>>");
-          redirect.append_mode = (tokens[i] == ">>" || tokens[i] == "2>>");
-
-          // Erase ONLY the operator and the filename, preserving everything
-          // else! First erase the filename, then erase the operator
-          tokens.erase(tokens.begin() + i + 1);
-          tokens.erase(tokens.begin() + i);
-
-          break; // Stop at the first redirection operator found
-        }
-      }
-    }
-
-    std::ofstream out_file;
-    std::streambuf *original_cout_buf = std::cout.rdbuf();
-    std::streambuf *original_cerr_buf = std::cerr.rdbuf();
-
-    if (redirect.has_redirect) {
-      // Choose between truncating (clearing) or appending
-      std::ios_base::openmode mode =
-          redirect.append_mode ? std::ios::app : std::ios::trunc;
-
-      out_file.open(redirect.filename, mode);
-      if (out_file.is_open()) {
-        if (redirect.is_stderr) {
-          std::cerr.rdbuf(out_file.rdbuf());
-        } else {
-          std::cout.rdbuf(out_file.rdbuf());
-        }
-      }
-    }
 
     if (tokens.empty()) {
       continue;
     }
 
-    // 2. The first token is always the command name (safely stripped of
-    // quotes!)
+    // 2. The first token is always the command name
     std::string command = tokens[0];
 
     // the exit builtin
@@ -295,40 +252,56 @@ int main(int argc, char *argv[]) {
     }
 
     // the cd shell builtin
-    else if (command == "cd") {
-      std::string argument =
-          (tokens.size() > 1)
-              ? tokens[1]
-              : (std::getenv("HOME") ? std::getenv("HOME") : "/");
+    if (command == "cd") {
+      std::string argument;
+      if (tokens.size() > 1) {
+        argument = tokens[1];
+      } else {
+        char *home = std::getenv("HOME");
+        argument = home ? home : "/";
+      }
+
       std::filesystem::path directory(expandUserPath(argument));
-      if (!std::filesystem::exists(directory) ||
-          !std::filesystem::is_directory(directory)) {
+      std::error_code ec;
+
+      if (!std::filesystem::exists(directory, ec) ||
+          !std::filesystem::is_directory(directory, ec)) {
         std::cerr << "cd: " << argument << ": No such file or directory\n";
         continue;
-      } else {
-        std::filesystem::current_path(directory);
-        continue;
       }
+      std::filesystem::current_path(directory);
+      continue;
     }
 
     // the pwd shell builtin
-    else if (command == "pwd") {
+    if (command == "pwd") {
       try {
-        std::cout << std::filesystem::current_path().string() << std::endl;
+        if ((tokens[1] == ">" or tokens[1] == "1>") and !tokens[2].empty()) {
+          std::ofstream output_file(tokens[2], std::ios::trunc);
+          output_file << std::filesystem::current_path().string() << std::endl;
+        } else
+          std::cout << std::filesystem::current_path().string() << std::endl;
       } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Error " << e.code() << ": " << e.what() << std::endl;
       }
+      Flush();
       continue;
     }
 
     // the type shell builtin
-    else if (command == "type") {
+    if (command == "type") {
       if (tokens.size() > 1) {
         std::string argument = tokens[1];
         if (argument == "echo" || argument == "type" || argument == "exit" ||
             argument == "pwd" || argument == "cd") {
-          std::cout << argument << " is a shell builtin" << std::endl;
-          continue;
+          if ((!tokens[2].empty() and
+               (tokens[2] == ">" or tokens[2] == "1>")) &&
+              !tokens[3].empty()) {
+            std::ofstream output_file(tokens[3], std::ios::trunc);
+            output_file << argument << " is a shell builtin" << std::endl;
+          } else {
+            std::cout << argument << " is a shell builtin" << std::endl;
+          }
         } else {
           const char *path_val = std::getenv("PATH");
           if (path_val != nullptr) {
@@ -338,31 +311,99 @@ int main(int argc, char *argv[]) {
             while (std::getline(ps, token, ':')) {
               std::string filepath = token + "/" + argument;
               if (fileExists(filepath) && isFileExecutable(filepath)) {
-                std::cout << argument << " is " << filepath << std::endl;
+                if ((!tokens[2].empty() and
+                     (tokens[2] == ">" or tokens[2] == "1>")) &&
+                    !tokens[3].empty()) {
+                  std::ofstream output_file(tokens[3], std::ios::trunc);
+                  output_file << argument << " is " << filepath << std::endl;
+                } else {
+                  std::cout << argument << " is " << filepath << std::endl;
+                }
                 found = true;
                 break;
               }
             }
             if (!found)
               std::cerr << argument << ": not found" << std::endl;
-            continue;
           } else {
             std::cerr << argument << ": not found" << std::endl;
-            continue;
           }
         }
       }
+      continue;
     }
 
-    else if (command == "echo") {
-      printTokens(tokens, std::cout, tokens.size());
-      continue;
+    // THE ECHO BUILTIN (Your exact, original working logic preserved)
+    if (command == "echo") {
+      if (tokens.size() > 2) {
+        int output_redirect_idx = -1;
+        for (size_t i = 1; i < tokens.size(); i++) {
+          if (tokens[i] == ">" || tokens[i] == "1>") {
+            output_redirect_idx = i;
+            break;
+          }
+        }
+        if (output_redirect_idx == -1) {
+          printTokens(tokens, std::cout, tokens.size());
+          continue;
+        } else if (output_redirect_idx + 1 < tokens.size()) {
+          std::ofstream outFile(tokens[output_redirect_idx + 1],
+                                std::ios_base::trunc);
+
+          if (outFile.is_open()) {
+            for (size_t i = 1; i < output_redirect_idx; i++) {
+              outFile << tokens[i];
+              if (i != output_redirect_idx - 1) {
+                outFile << ' ';
+              }
+            }
+            outFile.close();
+          }
+          if (output_redirect_idx + 1 < tokens.size() - 1) {
+            std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
+                                              std::ios::app);
+            if (outFileInAppendMode.is_open()) {
+              for (size_t i = output_redirect_idx + 2; i < tokens.size(); i++) {
+                outFileInAppendMode << ' ' << tokens[i];
+              }
+            }
+            outFileInAppendMode.close();
+          }
+          std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
+                                            std::ios::app);
+          outFileInAppendMode << std::endl;
+          outFileInAppendMode.close();
+          continue;
+        }
+      } else {
+        printTokens(tokens, std::cout, tokens.size());
+        continue;
+      }
     }
 
     // EXTERNAL COMMAND LOGIC
     if (isExternalCommand(command)) {
+      int output_redirect_idx = -1;
+      bool is_stderr = false; // Tracks if we found 2>
+
+      // Look through tokens to find ANY redirection operator (>, 1>, or 2>)
+      for (size_t i = 1; i < tokens.size(); i++) {
+        if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>") {
+          output_redirect_idx = i;
+          if (tokens[i] == "2>") {
+            is_stderr = true;
+          }
+          break;
+        }
+      }
+
+      // Build the mutable char* array up to the redirection operator index
       std::vector<char *> fullCommand;
-      for (auto &token : tokens) {
+      size_t end =
+          (output_redirect_idx == -1) ? tokens.size() : output_redirect_idx;
+
+      for (size_t i = 0; i < end; i++) {
+        auto &token = tokens[i];
         fullCommand.push_back(&token[0]);
       }
       fullCommand.push_back(nullptr);
@@ -375,44 +416,32 @@ int main(int argc, char *argv[]) {
 
       if (pid == 0) {
         // Child process execution window
+        // 3. Open the file for writing
         // O_WRONLY: Write-only mode
         // O_CREAT: Create file if it doesn't exist
         // O_TRUNC: Clear existing content (use O_APPEND to append instead)
         // 0644: Read/Write permissions for owner, Read-only for others
-        if (redirect.has_redirect) {
-          // 1. DYNAMICALLY CREATE PARENT DIRECTORIES IF THEY DO NOT EXIST
-          std::filesystem::path out_path(redirect.filename);
-          if (out_path.has_parent_path()) {
-            std::error_code dir_ec;
-            // Creates the directory structure (equivalent to 'mkdir -p')
-            std::filesystem::create_directories(out_path.parent_path(), dir_ec);
-          }
+        if (output_redirect_idx != -1 &&
+            output_redirect_idx + 1 < tokens.size()) {
+          const char *outFile = tokens[output_redirect_idx + 1].c_str();
 
-          // 2. Open the file now that its parent directory is guaranteed to
-          // exist
-          int mode_flag = redirect.append_mode ? O_APPEND : O_TRUNC;
-          int fd = open(redirect.filename.c_str(),
-                        O_WRONLY | O_CREAT | mode_flag, 0644);
-
+          int fd = open(outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
           if (fd < 0) {
-            std::cerr << "shell: " << redirect.filename
-                      << ": No such file or directory\n";
             std::exit(1);
           }
 
-          int target_fd = redirect.is_stderr ? STDERR_FILENO : STDOUT_FILENO;
+          // DYNAMIC FILENO REDIRECTION:
+          // If we flagged is_stderr as true, redirect STDERR_FILENO (2).
+          // Otherwise, redirect STDOUT_FILENO (1).
+          int target_fd = is_stderr ? STDERR_FILENO : STDOUT_FILENO;
 
           if (dup2(fd, target_fd) < 0) {
-            perror("Redirection failed");
             std::exit(1);
           }
           close(fd);
         }
 
         execvp(fullCommand[0], fullCommand.data());
-
-        // If execvp fails, it means the command binary wasn't found or couldn't
-        // run
         perror("Exec failed");
         std::exit(1);
       } else {
