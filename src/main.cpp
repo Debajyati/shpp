@@ -216,6 +216,95 @@ void printTokens(std::vector<std::string> &tokens, std::ostream &out,
   Flush();
 };
 
+struct RedirectionInfo {
+  int redirect_idx = -1;
+  bool is_stderr = false;
+  bool is_append = false;
+  std::string filename = "";
+  size_t cmd_end_idx = 0; // Where the actual command arguments end
+};
+
+// Scans tokens starting from a given index to find redirection operators
+RedirectionInfo parseRedirection(const std::vector<std::string> &tokens,
+                                 size_t start_idx = 1) {
+  RedirectionInfo info;
+  info.cmd_end_idx = tokens.size();
+
+  for (size_t i = start_idx; i < tokens.size(); i++) {
+    if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>" ||
+        tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
+
+      info.redirect_idx = i;
+      info.is_stderr = (tokens[i] == "2>" || tokens[i] == "2>>");
+      info.is_append =
+          (tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>");
+
+      if (i + 1 < tokens.size()) {
+        info.filename = tokens[i + 1];
+      }
+      info.cmd_end_idx = i;
+      break;
+    }
+  }
+  return info;
+}
+
+// RAII class to temporarily redirect std::cout or std::cerr for builtins
+class BuiltinRedirectionGuard {
+  std::streambuf *old_buf = nullptr;
+  std::ostream *target_stream = nullptr;
+  std::ofstream file_stream;
+
+public:
+  BuiltinRedirectionGuard(const RedirectionInfo &info,
+                          bool command_failed = false) {
+    if (info.redirect_idx == -1 || info.filename.empty())
+      return;
+
+    // Determine if the output generation should go to the redirected file.
+    // For type/pwd/echo, we match the stream type or status:
+    // e.g. if command failed (stderr) and user redirected stderr, OR if command
+    // succeeded and user redirected stdout.
+    bool match_stdout = !info.is_stderr && !command_failed;
+    bool match_stderr = info.is_stderr && command_failed;
+
+    // Special case: echo always prints to stdout stream conceptually, pwd
+    // always prints to stdout. If a command prints to STDOUT but user
+    // redirected STDERR, the file is just created/cleared.
+    std::ios_base::openmode mode =
+        info.is_append ? std::ios_base::app : std::ios_base::trunc;
+
+    file_stream.open(info.filename, mode);
+    if (!file_stream.is_open())
+      return;
+
+    if (match_stdout || (info.is_stderr && !command_failed)) {
+      // If it's a stdout command, check if we hook up cout or just leave it
+      // open
+      if (!info.is_stderr) {
+        target_stream = &std::cout;
+        old_buf = std::cout.rdbuf(file_stream.rdbuf());
+      }
+    } else if (match_stderr || (!info.is_stderr && command_failed)) {
+      // If it's a stderr error output (like type command not found)
+      if (info.is_stderr) {
+        target_stream = &std::cerr;
+        old_buf = std::cerr.rdbuf(file_stream.rdbuf());
+      }
+    }
+  }
+
+  ~BuiltinRedirectionGuard() {
+    if (old_buf && target_stream) {
+      target_stream->rdbuf(
+          old_buf); // Restore original stream buffer automatically
+    }
+    if (file_stream.is_open()) {
+      file_stream.close();
+    }
+  }
+};
+
 int main(int argc, char *argv[]) {
   Flush();
 
@@ -268,43 +357,10 @@ int main(int argc, char *argv[]) {
     // the pwd shell builtin
     if (command == "pwd") {
       try {
-        int output_redirect_idx = -1;
-        bool is_stderr = false;
-        bool is_append = false;
-
-        // Scan tokens for redirection operators
-        for (size_t i = 1; i < tokens.size(); i++) {
-          if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>" ||
-              tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
-            output_redirect_idx = i;
-            if (tokens[i] == "2>" || tokens[i] == "2>>") {
-              is_stderr = true;
-            }
-            if (tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
-              is_append = true;
-            }
-            break;
-          }
-        }
-
-        std::string pwd_output = std::filesystem::current_path().string();
-
-        if (output_redirect_idx == -1) {
-          std::cout << pwd_output << std::endl;
-        } else if (output_redirect_idx + 1 < tokens.size()) {
-          std::ios_base::openmode write_mode =
-              is_append ? std::ios_base::app : std::ios_base::trunc;
-          std::ofstream outFile(tokens[output_redirect_idx + 1], write_mode);
-
-          if (outFile.is_open()) {
-            if (!is_stderr) {
-              outFile << pwd_output << std::endl;
-            } else {
-              // Stderr redirection targets stderr, stdout prints normally
-              std::cout << pwd_output << std::endl;
-            }
-            outFile.close();
-          }
+        RedirectionInfo redir = parseRedirection(tokens, 1);
+        {
+          BuiltinRedirectionGuard guard(redir, false);
+          std::cout << std::filesystem::current_path().string() << std::endl;
         }
       } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Error " << e.code() << ": " << e.what() << std::endl;
@@ -317,26 +373,8 @@ int main(int argc, char *argv[]) {
     if (command == "type") {
       if (tokens.size() > 1) {
         std::string argument = tokens[1];
-        int output_redirect_idx = -1;
-        bool is_stderr = false;
-        bool is_append = false;
+        RedirectionInfo redir = parseRedirection(tokens, 2);
 
-        // Scan tokens for redirection operators
-        for (size_t i = 2; i < tokens.size(); i++) {
-          if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>" ||
-              tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
-            output_redirect_idx = i;
-            if (tokens[i] == "2>" || tokens[i] == "2>>") {
-              is_stderr = true;
-            }
-            if (tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
-              is_append = true;
-            }
-            break;
-          }
-        }
-
-        // Determine the result content string first
         std::string type_output = "";
         bool found = false;
 
@@ -358,40 +396,17 @@ int main(int argc, char *argv[]) {
               }
             }
           }
-          if (!found) {
+          if (!found)
             type_output = argument + ": not found";
-          }
         }
 
-        // Output logic utilizing redirection settings
-        if (output_redirect_idx == -1) {
-          if (!found) {
-            std::cerr << type_output << std::endl;
-          } else {
+        // The Guard handles standard text streams vs files safely!
+        {
+          BuiltinRedirectionGuard guard(redir, !found);
+          if (found) {
             std::cout << type_output << std::endl;
-          }
-        } else if (output_redirect_idx + 1 < tokens.size()) {
-          std::ios_base::openmode write_mode =
-              is_append ? std::ios_base::app : std::ios_base::trunc;
-          std::ofstream outFile(tokens[output_redirect_idx + 1], write_mode);
-
-          if (outFile.is_open()) {
-            if (!found) {
-              // Command missing -> targets stderr
-              if (is_stderr) {
-                outFile << type_output << std::endl;
-              } else {
-                std::cerr << type_output << std::endl;
-              }
-            } else {
-              // Command found -> targets stdout
-              if (!is_stderr) {
-                outFile << type_output << std::endl;
-              } else {
-                std::cout << type_output << std::endl;
-              }
-            }
-            outFile.close();
+          } else {
+            std::cerr << type_output << std::endl;
           }
         }
       }
@@ -401,126 +416,22 @@ int main(int argc, char *argv[]) {
 
     // THE ECHO BUILTIN
     if (command == "echo") {
-      if (tokens.size() > 2) {
-        int output_redirect_idx = -1;
-        bool is_stderr = false;
-        bool is_append = false;
-
-        // Scan for ANY redirection operator inside echo's arguments
-        for (size_t i = 1; i < tokens.size(); i++) {
-          if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>" ||
-              tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
-            output_redirect_idx = i;
-            if (tokens[i] == "2>" || tokens[i] == "2>>") {
-              is_stderr = true;
-            }
-            if (tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
-              is_append = true;
-            }
-            break;
-          }
-        }
-
-        if (output_redirect_idx == -1) {
-          printTokens(tokens, std::cout, tokens.size());
-          continue;
-        } else if (output_redirect_idx + 1 < tokens.size()) {
-          std::ofstream outFile;
-          // Choose write mode dynamically: append vs truncate
-          std::ios_base::openmode write_mode =
-              is_append ? std::ios_base::app : std::ios_base::trunc;
-
-          if (!is_stderr) {
-            // Normal stdout redirection
-            outFile.open(tokens[output_redirect_idx + 1], write_mode);
-          } else {
-            // Stderr redirection: Touch the file using the correct write mode
-            // so it creates/preserves it
-            std::ofstream touchFile(tokens[output_redirect_idx + 1],
-                                    write_mode);
-            touchFile.close();
-          }
-
-          // Choose the right output stream for the text tokens
-          std::ostream &targetStream = is_stderr ? std::cout : outFile;
-
-          if (is_stderr || outFile.is_open()) {
-            for (size_t i = 1; i < output_redirect_idx; i++) {
-              targetStream << tokens[i];
-              if (i != output_redirect_idx - 1) {
-                targetStream << ' ';
-              }
-            }
-            if (!is_stderr)
-              outFile.close();
-          }
-
-          // Handle any tokens trailing AFTER the filename
-          if (output_redirect_idx + 1 < tokens.size() - 1) {
-            if (is_stderr) {
-              for (size_t i = output_redirect_idx + 2; i < tokens.size(); i++) {
-                std::cout << ' ' << tokens[i];
-              }
-            } else {
-              // Trailing arguments always append to the target file
-              std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
-                                                std::ios::app);
-              if (outFileInAppendMode.is_open()) {
-                for (size_t i = output_redirect_idx + 2; i < tokens.size();
-                     i++) {
-                  outFileInAppendMode << ' ' << tokens[i];
-                }
-              }
-              outFileInAppendMode.close();
-            }
-          }
-
-          // Wrap up the line ending
-          if (is_stderr) {
-            std::cout << std::endl;
-          } else {
-            std::ofstream outFileInAppendMode(tokens[output_redirect_idx + 1],
-                                              std::ios::app);
-            outFileInAppendMode << std::endl;
-            outFileInAppendMode.close();
-          }
-          continue;
-        }
-      } else {
-        printTokens(tokens, std::cout, tokens.size());
-        continue;
+      RedirectionInfo redir = parseRedirection(tokens, 1);
+      {
+        BuiltinRedirectionGuard guard(redir, false);
+        // Print everything up to the redirection symbol location
+        printTokens(tokens, std::cout, redir.cmd_end_idx);
       }
+      continue;
     }
 
     // EXTERNAL COMMAND LOGIC
     if (isExternalCommand(command)) {
-      int output_redirect_idx = -1;
-      bool is_stderr = false;
-      bool is_append = false;
+      RedirectionInfo redir = parseRedirection(tokens, 1);
 
-      // Look through tokens to find ANY redirection operator
-      for (size_t i = 1; i < tokens.size(); i++) {
-        if (tokens[i] == ">" || tokens[i] == "1>" || tokens[i] == "2>" ||
-            tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
-          output_redirect_idx = i;
-          if (tokens[i] == "2>" || tokens[i] == "2>>") {
-            is_stderr = true;
-          }
-          if (tokens[i] == ">>" || tokens[i] == "1>>" || tokens[i] == "2>>") {
-            is_append = true;
-          }
-          break;
-        }
-      }
-
-      // Build the mutable char* array up to the redirection operator index
       std::vector<char *> fullCommand;
-      size_t end =
-          (output_redirect_idx == -1) ? tokens.size() : output_redirect_idx;
-
-      for (size_t i = 0; i < end; i++) {
-        auto &token = tokens[i];
-        fullCommand.push_back(&token[0]);
+      for (size_t i = 0; i < redir.cmd_end_idx; i++) {
+        fullCommand.push_back(&tokens[i][0]);
       }
       fullCommand.push_back(nullptr);
 
@@ -536,24 +447,17 @@ int main(int argc, char *argv[]) {
         // O_CREAT: Create file if it doesn't exist
         // O_TRUNC: Clear existing content (use O_APPEND to append instead)
         // 0644: Read/Write permissions for owner, Read-only for others
-        if (output_redirect_idx != -1 &&
-            output_redirect_idx + 1 < tokens.size()) {
-          const char *outFile = tokens[output_redirect_idx + 1].c_str();
+        if (redir.redirect_idx != -1 && !redir.filename.empty()) {
+          int file_mode = redir.is_append ? O_APPEND : O_TRUNC;
+          int fd = open(redir.filename.c_str(), O_WRONLY | O_CREAT | file_mode,
+                        0644);
 
-          // Choose O_APPEND if running a append mode redirection, otherwise
-          // clear file with O_TRUNC
-          int file_mode = is_append ? O_APPEND : O_TRUNC;
-          int fd = open(outFile, O_WRONLY | O_CREAT | file_mode, 0644);
-
-          if (fd < 0) {
+          if (fd < 0)
             std::exit(1);
-          }
 
-          int target_fd = is_stderr ? STDERR_FILENO : STDOUT_FILENO;
-
-          if (dup2(fd, target_fd) < 0) {
+          int target_fd = redir.is_stderr ? STDERR_FILENO : STDOUT_FILENO;
+          if (dup2(fd, target_fd) < 0)
             std::exit(1);
-          }
           close(fd);
         }
 
